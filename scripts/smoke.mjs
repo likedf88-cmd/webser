@@ -15,21 +15,35 @@ function check(name, cond, extra = '') {
 
 function client() {
   let cookie = ''
-  return async function call(path, { method = 'GET', body } = {}) {
-    const headers = {}
-    if (body !== undefined) headers['Content-Type'] = 'application/json'
-    if (cookie) headers.Cookie = cookie
-    const res = await fetch(BASE + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) })
-    const setCookies = res.headers.getSetCookie ? res.headers.getSetCookie() : []
-    for (const c of setCookies) {
+  const remember = (res) => {
+    for (const c of (res.headers.getSetCookie ? res.headers.getSetCookie() : [])) {
       const kv = c.split(';')[0]
       if (kv.startsWith('asc_session=')) cookie = kv
     }
+  }
+  const parse = async (res) => {
     const text = await res.text()
     let data
     try { data = JSON.parse(text) } catch { data = text }
     return { status: res.status, data }
   }
+  async function call(path, { method = 'GET', body } = {}) {
+    const headers = {}
+    if (body !== undefined) headers['Content-Type'] = 'application/json'
+    if (cookie) headers.Cookie = cookie
+    const res = await fetch(BASE + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) })
+    remember(res)
+    return parse(res)
+  }
+  /** multipart upload (FormData) reusing the same session cookie */
+  call.form = async (path, formData) => {
+    const headers = {}
+    if (cookie) headers.Cookie = cookie
+    const res = await fetch(BASE + path, { method: 'POST', headers, body: formData })
+    remember(res)
+    return parse(res)
+  }
+  return call
 }
 
 const runId = Date.now().toString(36)
@@ -222,6 +236,209 @@ const bobDeleteOwner = await bob('/admin/users/' + regA.data.user.id, { method: 
 check('admin cannot delete accounts', bobDeleteOwner.status === 403)
 const deleteCarol = await alice('/admin/users/' + regC.data.user.id, { method: 'DELETE' })
 check('owner deletes account', deleteCarol.status === 200)
+
+/* ---------------- avatar studio fixtures ---------------- */
+const GLB_MAGIC = 0x46546c67
+
+function buildGlb(json, bin) {
+  const jsonBuf = Buffer.from(JSON.stringify(json), 'utf8')
+  const jsonPad = (4 - (jsonBuf.length % 4)) % 4
+  const jsonChunk = Buffer.concat([jsonBuf, Buffer.alloc(jsonPad, 0x20)])
+  const binChunk = bin ? Buffer.concat([bin, Buffer.alloc((4 - (bin.length % 4)) % 4)]) : null
+  const total = 12 + 8 + jsonChunk.length + (binChunk ? 8 + binChunk.length : 0)
+  const header = Buffer.alloc(12)
+  header.writeUInt32LE(GLB_MAGIC, 0)
+  header.writeUInt32LE(2, 4)
+  header.writeUInt32LE(total, 8)
+  const jsonHead = Buffer.alloc(8)
+  jsonHead.writeUInt32LE(jsonChunk.length, 0)
+  jsonHead.writeUInt32LE(0x4e4f534a, 4)
+  const chunks = [header, jsonHead, jsonChunk]
+  if (binChunk) {
+    const binHead = Buffer.alloc(8)
+    binHead.writeUInt32LE(binChunk.length, 0)
+    binHead.writeUInt32LE(0x004e4942, 4)
+    chunks.push(binHead, binChunk)
+  }
+  return Buffer.concat(chunks)
+}
+
+function glbJson(buffer) {
+  const len = buffer.readUInt32LE(12)
+  return JSON.parse(buffer.subarray(20, 20 + len).toString('utf8').replace(/\u0000+$/g, '').trim())
+}
+
+const identity = () => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+
+/** Build a tiny but structurally valid GLB (1 triangle) with an optional humanoid rig. */
+function buildModel({ boneNames = [], skinned = false, animated = false }) {
+  const parts = []
+  const views = []
+  let offset = 0
+  const pushView = (typed) => {
+    const buf = Buffer.from(typed.buffer, typed.byteOffset, typed.byteLength)
+    views.push({ byteOffset: offset, byteLength: buf.length })
+    parts.push(buf)
+    const pad = (4 - (buf.length % 4)) % 4
+    if (pad) { parts.push(Buffer.alloc(pad)); offset += buf.length + pad } else offset += buf.length
+    return views.length - 1
+  }
+
+  const posView = pushView(new Float32Array([-0.5, 0, 0, 0.5, 0, 0, 0, 1, 0]))
+  let jointView, weightView, ibmView
+  if (skinned) {
+    jointView = pushView(new Uint8Array([0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0]))
+    weightView = pushView(new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]))
+    const ibm = new Float32Array(boneNames.length * 16)
+    for (let i = 0; i < boneNames.length; i++) ibm.set(identity(), i * 16)
+    ibmView = pushView(ibm)
+  }
+  let timeView, rotView
+  if (animated) {
+    timeView = pushView(new Float32Array([0, 1]))
+    rotView = pushView(new Float32Array([0, 0, 0, 1, 0, 0, 0, 1]))
+  }
+
+  const accessors = [{ bufferView: posView, componentType: 5126, count: 3, type: 'VEC3', min: [-0.5, 0, 0], max: [0.5, 1, 0] }]
+  const attributes = { POSITION: 0 }
+  if (skinned) {
+    attributes.JOINTS_0 = accessors.length
+    accessors.push({ bufferView: jointView, componentType: 5121, count: 3, type: 'VEC4' })
+    attributes.WEIGHTS_0 = accessors.length
+    accessors.push({ bufferView: weightView, componentType: 5126, count: 3, type: 'VEC4' })
+    accessors.push({ bufferView: ibmView, componentType: 5126, count: boneNames.length, type: 'MAT4' })
+  }
+  let animation
+  if (animated) {
+    const input = accessors.push({ bufferView: timeView, componentType: 5126, count: 2, type: 'SCALAR', min: [0], max: [1] }) - 1
+    const output = accessors.push({ bufferView: rotView, componentType: 5126, count: 2, type: 'VEC4' }) - 1
+    animation = { name: 'Idle', samplers: [{ input, output }], channels: [{ sampler: 0, target: { node: 0, path: 'rotation' } }] }
+  }
+
+  const nodes = boneNames.map((name, i) => ({ name, ...(i < boneNames.length - 1 ? { children: [i + 1] } : {}) }))
+  const bodyIndex = nodes.length
+  nodes.push({ name: 'Body', mesh: 0, ...(skinned ? { skin: 0 } : {}) })
+
+  return buildGlb({
+    asset: { version: '2.0', generator: 'ASC smoke fixture' },
+    scene: 0,
+    scenes: [{ nodes: boneNames.length ? [0, bodyIndex] : [bodyIndex] }],
+    nodes,
+    meshes: [{ name: 'Body', primitives: [{ attributes, mode: 4 }] }],
+    accessors,
+    bufferViews: views,
+    buffers: [{ byteLength: offset }],
+    ...(skinned ? { skins: [{ joints: boneNames.map((_, i) => i), skeleton: 0, inverseBindMatrices: 3 }] } : {}),
+    ...(animated ? { animations: [animation] } : {})
+  }, Buffer.concat(parts))
+}
+
+const MIXAMO_BONES = [
+  'mixamorigHips', 'mixamorigSpine', 'mixamorigSpine2', 'mixamorigNeck', 'mixamorigHead',
+  'mixamorigLeftArm', 'mixamorigLeftForeArm', 'mixamorigLeftHand',
+  'mixamorigRightArm', 'mixamorigRightForeArm', 'mixamorigRightHand',
+  'mixamorigLeftUpLeg', 'mixamorigLeftLeg', 'mixamorigLeftFoot',
+  'mixamorigRightUpLeg', 'mixamorigRightLeg', 'mixamorigRightFoot'
+]
+const UNITY_BONES = [
+  'Pelvis', 'Spine', 'Head',
+  'Left_UpperArm', 'Left_LowerArm', 'Left_Hand', 'Right_UpperArm', 'Right_LowerArm', 'Right_Hand',
+  'Left_UpperLeg', 'Left_LowerLeg', 'Left_Foot', 'Right_UpperLeg', 'Right_LowerLeg', 'Right_Foot'
+]
+
+async function uploadModel(cli, buffer, filename) {
+  const form = new FormData()
+  form.append('model', new Blob([buffer], { type: filename.endsWith('.gltf') ? 'model/gltf+json' : 'model/gltf-binary' }), filename)
+  return cli.form('/avatar/upload', form)
+}
+
+async function waitAvatar(cli, id) {
+  for (let i = 0; i < 40; i++) {
+    const res = await cli('/avatar/' + id)
+    if (res.status === 200 && ['ready', 'unsupported', 'failed'].includes(res.data.avatar.status)) return res.data.avatar
+    await new Promise(r => setTimeout(r, 250))
+  }
+  return null
+}
+
+console.log('\n— Avatar Studio —')
+const anonStudio = await anon('/avatar/me')
+check('avatar studio requires auth', anonStudio.status === 401)
+const studioEmpty = await alice('/avatar/me')
+check('avatar studio payload', studioEmpty.status === 200 && Array.isArray(studioEmpty.data.avatars) && studioEmpty.data.limits.maxBytes === 20971520)
+
+const upUnrigged = await uploadModel(alice, buildModel({ skinned: false }), 'plain-mesh.glb')
+check('upload accepted', upUnrigged.status === 200 && !!upUnrigged.data.avatar?.id)
+const unrigged = await waitAvatar(alice, upUnrigged.data.avatar.id)
+check('unrigged model reported unsupported', unrigged?.status === 'unsupported' && unrigged?.rig === 'none')
+check('unsupported model explains rigging provider', /rigging provider/i.test(unrigged?.detail || ''))
+check('unsupported model is not equipable', unrigged?.url === null)
+
+const upBroken = await uploadModel(bob, Buffer.from('definitely not a gltf file'), 'broken.glb')
+const broken = await waitAvatar(bob, upBroken.data.avatar.id)
+check('corrupt model rejected by inspector', broken?.status === 'failed' && /magic/i.test(broken?.detail || ''))
+
+const externalGltf = JSON.stringify({
+  asset: { version: '2.0' },
+  scenes: [{ nodes: [0] }],
+  nodes: [{ name: 'Body', mesh: 0 }],
+  meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
+  accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: 'VEC3' }],
+  bufferViews: [{ byteOffset: 0, byteLength: 36 }],
+  buffers: [{ uri: 'scene.bin', byteLength: 36 }]
+})
+const upExternal = await uploadModel(bob, Buffer.from(externalGltf), 'external.gltf')
+const external = await waitAvatar(bob, upExternal.data.avatar.id)
+check('external asset references rejected', external?.status === 'failed' && /external files/i.test(external?.detail || ''))
+
+const upRigged = await uploadModel(alice, buildModel({ boneNames: MIXAMO_BONES, skinned: true, animated: true }), 'hero.glb')
+const rigged = await waitAvatar(alice, upRigged.data.avatar.id)
+check('mixamo-rigged model is ready', rigged?.status === 'ready' && rigged?.rig === 'compatible', rigged?.detail)
+check('skeleton matched to standard humanoid rig', (rigged?.skeleton?.coverage || 0) === 1 && rigged?.skeleton?.jointCount === 17)
+check('animation clips detected', rigged?.stats?.animations?.length === 1 && rigged?.stats?.animations[0].name === 'Idle')
+check('geometry inspected', rigged?.stats?.triangles === 1 && rigged?.stats?.meshes === 1)
+
+const ORIGIN = new URL(BASE).origin
+const processed = rigged?.url ? await fetch(new URL(rigged.url, ORIGIN).toString()) : null
+const processedBuffer = processed ? Buffer.from(await processed.arrayBuffer()) : null
+check('processed GLB is served', !!processed && processed.status === 200 && processedBuffer.readUInt32LE(0) === GLB_MAGIC)
+const renamed = processedBuffer ? glbJson(processedBuffer).nodes.map(n => n.name) : []
+check('joints renamed to canonical bones', renamed.includes('leftUpperArm') && renamed.includes('rightUpperLeg'))
+const originalJson = glbJson(buildModel({ boneNames: MIXAMO_BONES, skinned: true, animated: true }))
+check('original upload keeps its own names', originalJson.nodes[0].name === 'mixamorigHips')
+
+const select = await alice('/avatar/' + rigged.id + '/select', { method: 'POST' })
+check('equip processed avatar', select.status === 200 && select.data.equipped === rigged.id)
+const stealSelect = await bob('/avatar/' + rigged.id + '/select', { method: 'POST' })
+check('cannot equip another user avatar', stealSelect.status === 403)
+const stealDelete = await bob('/avatar/' + rigged.id, { method: 'DELETE' })
+check('cannot delete another user avatar', stealDelete.status === 403)
+const peek = await bob('/avatar/' + unrigged.id)
+check('unprocessed models stay private', peek.status === 403)
+
+const publicAvatar = await anon('/users/' + A.username + '/avatar')
+check('public avatar lookup', publicAvatar.status === 200 && !!publicAvatar.data.avatar.url)
+const profileWithAvatar = await anon('/users/' + A.username)
+check('profile exposes 3D avatar', !!profileWithAvatar.data.avatar3d?.url && !!profileWithAvatar.data.avatar3d?.look)
+
+const lookSave = await alice('/avatar/look', { method: 'PUT', body: { skin: '#123456', hair: '#abcdef' } })
+check('save appearance', lookSave.status === 200 && lookSave.data.look.skin === '#123456')
+const badLook = await alice('/avatar/look', { method: 'PUT', body: { skin: 'red' } })
+check('invalid colour rejected', badLook.status === 400)
+
+const outfit = await alice('/avatar/outfits', { method: 'POST', body: { name: 'Neon', look: { shirt: '#ff00ff' } } })
+check('save outfit', outfit.status === 200 && !!outfit.data.outfit?.id)
+const applyOutfit = await alice('/avatar/outfits/' + outfit.data.outfit.id + '/apply', { method: 'POST' })
+check('apply outfit', applyOutfit.status === 200 && applyOutfit.data.look.shirt === '#ff00ff')
+const meStudio = await alice('/avatar/me')
+check('studio reflects equipment', meStudio.data.equipped === rigged.id && meStudio.data.outfits.length === 1 && meStudio.data.look.hair === '#abcdef')
+
+const upUnity = await uploadModel(bob, buildModel({ boneNames: UNITY_BONES, skinned: true }), 'unity-hero.glb')
+const unity = await waitAvatar(bob, upUnity.data.avatar.id)
+check('unity-style skeleton remapped', unity?.status === 'ready' && unity?.rig === 'remapped', unity?.detail)
+check('optional missing bones reported', (unity?.skeleton?.fullMissing || []).includes('neck'))
+const bobSelect = await bob('/avatar/' + unity.id + '/select', { method: 'POST' })
+check('bob equips his remapped avatar', bobSelect.status === 200)
 
 console.log('\n— Logout —')
 const out = await bob('/auth/logout', { method: 'POST' })

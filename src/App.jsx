@@ -12,6 +12,7 @@ import MessagesPage from './pages/Messages'
 import FriendsPage from './pages/Friends'
 import NotificationsPage from './pages/Notifications'
 import WorldPage from './pages/World'
+import AvatarStudioPage from './pages/AvatarStudio'
 import ShopPage from './pages/Shop'
 import WalletPage from './pages/Wallet'
 import ProfilePage from './pages/Profile'
@@ -28,6 +29,7 @@ const NAV = [
   { to: '/messages', label: 'Messages', icon: '💬', badge: 'dm' },
   { to: '/friends', label: 'Friends', icon: '🫂' },
   { to: '/world', label: 'World', icon: '🌐' },
+  { to: '/avatar', label: 'Avatar Studio', icon: '🧍' },
   { to: '/shop', label: 'Marketplace', icon: '🛍️' },
   { to: '/games', label: 'Games', icon: '🎮' },
   { to: '/wallet', label: 'Wallet', icon: '🪙' },
@@ -136,6 +138,7 @@ export default function App() {
           <Route path="/friends" element={<FriendsPage />} />
           <Route path="/notifications" element={<NotificationsPage />} />
           <Route path="/world" element={<WorldPage />} />
+          <Route path="/avatar" element={<AvatarStudioPage />} />
           <Route path="/shop" element={<ShopPage />} />
           <Route path="/wallet" element={<WalletPage />} />
           <Route path="/games" element={<GamesPage />} />

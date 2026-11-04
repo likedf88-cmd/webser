@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, compact, RANK, timeAgo } from '../api'
 import { useAuth, useToast } from '../store'
 import { Avatar, Empty, Modal, Spinner } from '../components/ui'
+import Avatar3D from '../components/Avatar3D'
 
 export default function ProfilePage() {
   const { username } = useParams()
@@ -118,6 +119,46 @@ export default function ProfilePage() {
             <button className="btn btn-ghost btn-sm" onClick={() => setReportOpen(true)}>Report</button>
           </div>
         )}
+      </div>
+
+      <div className="card profile-model-card">
+        <div className="section-title">
+          <h2>3D avatar</h2>
+          {isMe && <Link to="/avatar" className="btn btn-ghost btn-sm">Open Avatar Studio</Link>}
+        </div>
+        <div className="profile-model-body">
+          <Avatar3D
+            url={data.avatar3d?.url}
+            look={data.avatar3d?.look}
+            accessories={data.avatar3d?.accessories || []}
+            height={240}
+            interactive
+            autoRotate
+          />
+          <div className="grow">
+            {data.avatar3d?.url ? (
+              <>
+                <p style={{ fontWeight: 600 }}>Custom rigged avatar</p>
+                <p className="hint">
+                  {data.avatar3d.rig === 'compatible' ? 'Humanoid skeleton matched' : 'Skeleton remapped to the ASC humanoid rig'}
+                  {data.avatar3d.animations?.length ? ` · ${data.avatar3d.animations.length} animation clip${data.avatar3d.animations.length > 1 ? 's' : ''}` : ''}
+                </p>
+              </>
+            ) : (
+              <>
+                <p style={{ fontWeight: 600 }}>Default avatar</p>
+                <p className="hint">
+                  {isMe
+                    ? 'Upload a rigged GLB in the Avatar Studio to replace this default look.'
+                    : 'This member has not equipped a custom 3D avatar yet.'}
+                </p>
+              </>
+            )}
+            {data.avatar3d?.accessories?.length > 0 && (
+              <p className="hint">Accessories: {data.avatar3d.accessories.map(a => a.name).join(', ')}</p>
+            )}
+          </div>
+        </div>
       </div>
 
       <div className="tabs" style={{ marginTop: 20 }}>

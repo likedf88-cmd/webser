@@ -4,6 +4,7 @@ import { requireAuth, RANK } from '../auth.js'
 import { upload, mediaTypeOf, fileUrl } from '../uploads.js'
 import { rateLimit } from '../rate.js'
 import { emitToUser } from '../bus.js'
+import { publicAvatarFor } from './avatar.js'
 
 const router = Router()
 const P = 'p.id,p.user_id,p.kind,p.text,p.media_url,p.media_type,p.repost_of,p.views,p.created_at'
@@ -242,7 +243,7 @@ router.get('/users/:username', (req, res) => {
   const requested = viewer
     ? !!db.prepare('SELECT 1 FROM follow_requests WHERE follower = ? AND following = ?').get(viewer, u.id)
     : false
-  res.json({ user: publicUser(u, viewer), posts, locked, requested })
+  res.json({ user: publicUser(u, viewer), posts, locked, requested, avatar3d: publicAvatarFor(u.id) })
 })
 
 router.patch('/users/me', requireAuth, upload.fields([{ name: 'avatar', maxCount: 1 }, { name: 'banner', maxCount: 1 }]), (req, res) => {

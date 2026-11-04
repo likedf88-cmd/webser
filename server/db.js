@@ -116,6 +116,31 @@ CREATE INDEX IF NOT EXISTS idx_tx_user ON transactions(user_id, created_at DESC)
 CREATE INDEX IF NOT EXISTS idx_stories_user ON stories(user_id, expires_at);
 `)
 
+/* avatar studio: uploaded models, appearance, outfits, bone attachments */
+db.exec(`
+CREATE TABLE IF NOT EXISTS avatars (
+  id TEXT PRIMARY KEY, user_id TEXT NOT NULL, source_url TEXT NOT NULL, processed_url TEXT,
+  file_name TEXT, file_size INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL DEFAULT 'My avatar',
+  status TEXT NOT NULL DEFAULT 'queued', rig TEXT NOT NULL DEFAULT 'none',
+  status_detail TEXT DEFAULT '', stats TEXT, skeleton TEXT, thumbnail TEXT, error TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS avatar_looks (
+  user_id TEXT PRIMARY KEY, body TEXT NOT NULL DEFAULT '{}', active_avatar_id TEXT,
+  updated_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS outfits (
+  id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, look TEXT NOT NULL DEFAULT '{}',
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS avatar_accessories (
+  user_id TEXT NOT NULL, item_id TEXT NOT NULL, bone TEXT NOT NULL DEFAULT 'head',
+  created_at INTEGER, PRIMARY KEY(user_id, item_id)
+);
+CREATE INDEX IF NOT EXISTS idx_avatars_user ON avatars(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_outfits_user ON outfits(user_id, created_at DESC);
+`)
+
 export const now = () => Date.now()
 export const newId = () => crypto.randomBytes(12).toString('hex')
 export const dayKey = (d = new Date()) => d.toISOString().slice(0, 10)
@@ -185,6 +210,7 @@ export function addCoins(userId, amount, kind, note) {
   )
 }
 
+/** avatar_id/`avatar_item_id` are separate concerns: this is the 3D model id. */
 export function publicUser(u, viewerId) {
   if (!u) return null
   const owned = db.prepare('SELECT item_id FROM purchases WHERE user_id = ?').all(u.id).map(r => r.item_id)

@@ -26,6 +26,7 @@ your users. It is a complete, self-contained platform you can run, use and exten
 | Frontend | React 18 + Vite + custom CSS design system | no heavy UI dependency, dark + light themes |
 | Calls | WebRTC peer connections, Socket.IO signalling | real media, not a mockup |
 | World | Canvas 2D top-down multiplayer renderer | runs anywhere, real presence per zone |
+| 3D avatars | three.js + GLTFLoader, server-side GLB inspector | real model rendering and real skeleton checks |
 
 ## Run it
 
@@ -49,8 +50,8 @@ After that, elevated roles are granted in the Admin panel and require the owner 
 
 ## What actually works (verified)
 
-`node scripts/smoke.mjs` runs an end-to-end test against the running API. Current run: **68 checks,
-68 passing**, covering:
+`node scripts/smoke.mjs` runs an end-to-end test against the running API. Current run: **105 checks,
+105 passing**, covering:
 
 - registration, duplicate rejection, bad password, cookie sessions, banned-user login block
 - posts, likes, comments, reposts, follows, following-feed, explore payload
@@ -62,11 +63,16 @@ After that, elevated roles are granted in the Admin panel and require the owner 
 - bans: rank hierarchy enforced (admin cannot ban owner), banned login + session invalidation, unban
 - gift cards: owner-only issue, single redemption, invalid code rejection
 - games: Flappy ASC payout + 15s rate limit, announcements fan-out
+- avatar studio: real GLB parsing, corrupt/magic-byte rejection, external-asset rejection, unrigged
+  models reported `unsupported`, Mixamo skeleton matched 100% and renamed in a normalized copy, Unity-style
+  skeleton remapped, animation clips detected, ownership checks on equip/delete/read, appearance colours,
+  outfits
 - privacy: private account lock, follow request + accept, content removal by staff
 - owner-only account deletion, logout
 
 Frontend `vite build` passes. Interactive browser checks (real calls between two devices, camera
-permissions, ringtone audio) must be done by you — this environment has no browser.
+permissions, ringtone audio, and the three.js viewer drawing on a GPU) must be done by you — this
+environment has no browser.
 
 ## Feature map
 
@@ -78,6 +84,11 @@ permissions, ringtone audio) must be done by you — this environment has no bro
   notes, GIFs, emoji picker, message reactions, replies, delete, unread badges.
 - **Calls** — voice or video, incoming call modal with selectable ringtone, accept/decline, mute,
   camera on/off, front/back switch, PiP, call timer, group calls, relayed WebRTC signalling.
+- **Avatar Studio** — upload a `.glb`/`.gltf` (20 MB limit), the server parses the real geometry,
+  materials, textures, skins and animations, matches the skeleton against the ASC humanoid rig (Mixamo and
+  Unity naming, plus generic aliases), writes a normalized GLB with canonical joint names while keeping the
+  original upload untouched, then previews it in three.js with its own animation clips, colours, saved
+  outfits and bone-attached accessories. Equip it and it renders on your profile.
 - **World** — three zones, WASD/arrow movement + sprint, mobile D-pad, live player positions, world
   chat, emotes, buy an avatar and you appear as it; otherwise a coloured circle with your name on top.
 - **Marketplace** — categories, search, buy with coins, gift items, equip, report listing.
@@ -104,11 +115,14 @@ permissions, ringtone audio) must be done by you — this environment has no bro
 
 These need services, keys or work I did not fake:
 
-1. **Automatic rigging of GLB avatars.** No rigging service is connected. Meshy `.glb` files are stored
-   and linked from the shop, but no skeleton is generated and no fake skeleton is assigned. You need a
-   rigging provider (Meshy's rigging API, Mixamo, or Ready Player Me) plus a job queue.
-2. **3D model rendering.** The world is a real multiplayer 2D top-down map, not a Three.js city. Adding
-   a GLB viewer needs `three` + `GLTFLoader` and a rigging/animation pipeline.
+1. **Automatic rigging service.** The pipeline really validates models and really remaps skeletons that
+   already exist, but it cannot *create* a skeleton for an unrigged mesh. Those uploads are reported
+   `unsupported` with the reason and a retry button — no fake skeleton is ever assigned. Enable it by
+   connecting a rigging provider (Meshy rigging API, Mixamo, Ready Player Me) to a job queue behind
+   `server/avatar.js`; the upload/status/retry plumbing is already in place.
+2. **3D avatar rendering is real (three.js + GLTFLoader), but the multiplayer world is still the Canvas 2D
+   top-down map.** The rig mapping, normalized models and animation clips are ready for a 3D world; moving
+   the world itself to instanced three.js scenes is the remaining step.
 3. **Live streaming.** Not implemented — needs an RTMP/SFU provider (Livekit, Mux, Cloudflare Stream).
 4. **Email verification / password reset.** Requires an email provider + tokens.
 5. **GIF search.** The picker uses a small public GIF set; search needs a Giphy or Tenor API key.
@@ -126,7 +140,11 @@ These need services, keys or work I did not fake:
 ## Layout
 
 ```
-server/            index.js · db.js (schema+seed) · auth.js · realtime.js · uploads.js · routes/
-src/               App.jsx · store.jsx · api.js · styles.css · components/ · pages/
+server/            index.js · db.js (schema+seed) · auth.js · realtime.js · uploads.js
+                   avatar.js (GLB parser + skeleton map) · routes/
+src/               App.jsx · store.jsx · api.js · styles.css · components/ (incl. Avatar3D.jsx) · pages/
 scripts/smoke.mjs  end-to-end API test (fresh DB, first user becomes owner)
 ```
+
+The API target for the Vite dev proxy can be overridden with `API_TARGET=http://127.0.0.1:8899`
+(useful when 8787 is already busy).

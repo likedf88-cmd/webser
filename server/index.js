@@ -13,6 +13,7 @@ import socialRoutes from './routes/social.js'
 import messageRoutes from './routes/messages.js'
 import economyRoutes from './routes/economy.js'
 import adminRoutes from './routes/admin.js'
+import avatarRoutes from './routes/avatar.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const app = express()
@@ -49,6 +50,7 @@ app.use('/api', authRoutes)
 app.use('/api', socialRoutes)
 app.use('/api', messageRoutes)
 app.use('/api', economyRoutes)
+app.use('/api', avatarRoutes)
 app.use('/api/admin', adminRoutes)
 
 // production static build
